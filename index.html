@@ -66,6 +66,7 @@
   .nav-item{width:100%;display:flex;align-items:center;gap:10px;padding:10px 20px;font-size:14px;color:var(--sidebar-text);background:none;border:none;text-align:left;cursor:pointer;border-right:2px solid transparent;}
   .nav-item:hover{background:#22303C;color:#D8DEE3;}
   .nav-item.active{background:var(--sidebar-active);color:var(--sidebar-text-active);border-right-color:var(--gold);}
+  .nav-badge{background:var(--red-text);color:#fff;font-size:10px;padding:1px 6px;border-radius:999px;margin-left:4px;}
   .sidebar-foot{padding:14px 20px;border-top:1px solid rgba(255,255,255,0.1);}
   .user-chip{font-size:12px;color:#D8DEE3;margin-bottom:2px;}
   .user-role{font-size:10px;color:#71828D;margin-bottom:10px;}
@@ -149,6 +150,7 @@
   .modal-body{padding:20px;}
   .field{margin-bottom:12px;}
   .field label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px;}
+  .field-error{color:var(--red-text);font-size:11px;margin-top:4px;}
   .empty-note{padding:24px;text-align:center;color:var(--muted2);}
   .plain-text{font-size:12px;color:var(--muted);}
   .loading-note{padding:40px;text-align:center;color:var(--muted2);}
@@ -214,6 +216,8 @@ function urgency(f){
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function isEmployee(){ return currentUser && currentUser.role === "employee"; }
 function isAdmin(){ return currentUser && currentUser.role === "admin"; }
+function isValidPAN(pan){ return /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan); }
+function isValidGSTIN(gstin){ return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin); }
 
 function visibleFilings(){ return isEmployee() ? filings.filter(f=>f.employeeId===currentUser.uid) : filings; }
 function visibleClients(){
@@ -344,7 +348,8 @@ function showApp(){
 function render(){ renderNav(); renderSidebarFoot(); renderMain(); }
 
 function renderNav(){
-  const items = [{id:"dashboard",label:"Dashboard"},{id:"clients",label:"Clients"},{id:"filings",label:"Filings"}];
+  const overdueCount = visibleFilings().filter(f=>f.status!=="Filed" && daysUntil(f.dueDate)<0).length;
+  const items = [{id:"dashboard",label:"Dashboard"},{id:"clients",label:"Clients"},{id:"filings",label:"Filings"+(overdueCount>0?` <span class="nav-badge">${overdueCount}</span>`:"")}];
   if(isAdmin()) items.push({id:"employees",label:"Employees"});
   document.getElementById("nav").innerHTML = items.map(it=>`
     <button class="nav-item ${state.tab===it.id?'active':''}" data-tab="${it.id}">${it.label}</button>
@@ -358,8 +363,10 @@ function renderSidebarFoot(){
   document.getElementById("sidebar-foot").innerHTML = `
     <div class="user-chip">${esc(currentUser.name)}</div>
     <div class="user-role">${isAdmin()?"Administrator":"Employee account"}</div>
+    <button class="logout-btn" id="change-password-btn" style="margin-bottom:6px">Change password</button>
     <button class="logout-btn" id="logout-btn">Sign out</button>
   `;
+  document.getElementById("change-password-btn").addEventListener("click", openChangePasswordModal);
   document.getElementById("logout-btn").addEventListener("click", logout);
 }
 
@@ -421,7 +428,7 @@ function dashboardHTML(){
 
 function clientsHTML(){
   const scoped = visibleClients();
-  const filtered = scoped.filter(c => c.name.toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.pan||"").toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.companyName||"").toLowerCase().includes(state.clientSearch.toLowerCase()));
+  const filtered = scoped.filter(c => c.name.toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.pan||"").toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.companyName||"").toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.phone||"").includes(state.clientSearch));
   return `
     <div class="row-between">
       <div><h1 class="page-title serif">Clients</h1><p class="page-sub" style="margin-bottom:0">${scoped.length} client${scoped.length!==1?'s':''}${isEmployee()?" assigned to you":" on record"}</p></div>
@@ -429,14 +436,14 @@ function clientsHTML(){
     </div>
     <div class="search-wrap"><span class="search-icon">🔍</span><input id="client-search" placeholder="Search by name or PAN..." value="${esc(state.clientSearch)}" /></div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Company</th><th>PAN</th><th>Type</th><th>Status</th><th>Open filings</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Company</th><th>Phone</th><th>PAN</th><th>Type</th><th>Status</th><th>Open filings</th><th></th></tr></thead>
       <tbody>
         ${filtered.length ? filtered.map(c=>{ const openCount = visibleFilings().filter(f=>f.clientId===c.id && f.status!=="Filed").length; return `
           <tr class="clickable" data-client="${c.id}">
-            <td class="cell-strong">${esc(c.name)}</td><td class="cell-muted">${esc(c.companyName||"-")}</td><td class="cell-muted">${esc(c.pan||"-")}</td>
+            <td class="cell-strong">${esc(c.name)}</td><td class="cell-muted">${esc(c.companyName||"-")}</td><td class="cell-muted">${esc(c.phone||"-")}</td><td class="cell-muted">${esc(c.pan||"-")}</td>
             <td class="cell-muted">${esc(c.type||"-")}</td><td><span class="pill pill-green">${esc(c.status||"Active")}</span></td>
             <td class="cell-muted">${openCount}</td><td class="chevron">›</td>
-          </tr>`; }).join("") : `<tr><td colspan="7" class="empty-note">No clients found.</td></tr>`}
+          </tr>`; }).join("") : `<tr><td colspan="8" class="empty-note">No clients found.</td></tr>`}
       </tbody>
     </table></div>
   `;
@@ -449,7 +456,9 @@ function clientDetailHTML(){
   return `
     <button class="link-back" id="btn-back-clients">← Back to clients</button>
     <h1 class="page-title serif">${esc(c.name)}</h1>
-    <p class="page-sub">${c.companyName?esc(c.companyName)+" · ":""}${esc(c.type||"-")} · PAN ${esc(c.pan||"-")} · GSTIN ${esc(c.gstin||"-")}</p>
+    <p class="page-sub">${c.companyName?esc(c.companyName)+" · ":""}${esc(c.type||"-")} · PAN ${esc(c.pan||"-")} · GSTIN ${esc(c.gstin||"-")}${c.phone?" · 📞 "+esc(c.phone):""}</p>
+    ${(c.otherCompanies && c.otherCompanies.length) ? `<div style="margin-bottom:12px">${c.otherCompanies.map(o=>`<span class="pill pill-green" style="margin-right:6px">${esc(o)}</span>`).join("")}</div>` : ""}
+    ${c.notes ? `<div class="card" style="margin-bottom:20px"><h2 class="serif" style="font-size:14px">Notes</h2><p class="cell-muted" style="font-size:13px;margin:0">${esc(c.notes)}</p></div>` : ""}
     <div class="table-wrap"><table>
       <thead><tr><th>Filing type</th><th>Due date</th><th>Assigned to</th><th>Status</th><th>Fee</th><th>Payment</th></tr></thead>
       <tbody>
@@ -471,6 +480,7 @@ function filingsHTML(){
     <div class="row-between">
       <div><h1 class="page-title serif">Filings</h1><p class="page-sub" style="margin-bottom:0">${scoped.length} filing${scoped.length!==1?'s':''}${isEmployee()?" assigned to you":" tracked across all clients"}</p></div>
       <div style="display:flex;gap:8px">
+        <button class="btn-primary" id="btn-export-csv" style="background:#6B655A">⬇ Export CSV</button>
         <button class="btn-primary" id="btn-log-payment" style="background:#2F6B45">+ Log payment</button>
         ${isAdmin()?`<button class="btn-primary" id="btn-add-filing">+ Add filing</button>`:""}
       </div>
@@ -545,6 +555,7 @@ function bindMainEvents(){
     const addBtn = document.getElementById("btn-add-filing");
     if(addBtn) addBtn.addEventListener("click", openAddFilingModal);
     document.getElementById("btn-log-payment").addEventListener("click", openLogPaymentModal);
+    document.getElementById("btn-export-csv").addEventListener("click", exportFilingsCSV);
     const filterEmp = document.getElementById("filter-emp");
     if(filterEmp) filterEmp.addEventListener("change", (e)=>{ state.filingFilterEmp = e.target.value; renderMain(); });
     document.getElementById("filter-status").addEventListener("change", (e)=>{ state.filingFilterStatus = e.target.value; renderMain(); });
@@ -578,6 +589,61 @@ function refocus(id){ const el=document.getElementById(id); if(el){ el.focus(); 
 // ==================== Modals ====================
 function closeModal(){ document.getElementById("modal-root").innerHTML = ""; }
 
+function openChangePasswordModal(){
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" id="overlay"><div class="modal-box">
+      <div class="modal-head"><h3 class="serif">Change password</h3><button class="modal-close" id="close-modal">✕</button></div>
+      <div class="modal-body">
+        <div id="cp-error-slot"></div>
+        <div class="field"><label>Current password</label><input type="password" id="cp-current" /></div>
+        <div class="field"><label>New password (min 6 characters)</label><input type="password" id="cp-new" /></div>
+        <div class="field"><label>Confirm new password</label><input type="password" id="cp-confirm" /></div>
+        <button class="btn-primary" id="save-password" style="width:100%;justify-content:center;margin-top:8px">Update password</button>
+      </div>
+    </div></div>`;
+  document.getElementById("close-modal").addEventListener("click", closeModal);
+  document.getElementById("overlay").addEventListener("click", (e)=>{ if(e.target.id==="overlay") closeModal(); });
+  document.getElementById("save-password").addEventListener("click", async ()=>{
+    const currentPw = document.getElementById("cp-current").value;
+    const newPw = document.getElementById("cp-new").value;
+    const confirmPw = document.getElementById("cp-confirm").value;
+    const errSlot = document.getElementById("cp-error-slot");
+    errSlot.innerHTML = "";
+    if(newPw.length < 6){ errSlot.innerHTML = `<div class="login-error">New password must be at least 6 characters.</div>`; return; }
+    if(newPw !== confirmPw){ errSlot.innerHTML = `<div class="login-error">New passwords don't match.</div>`; return; }
+    try{
+      const user = auth.currentUser;
+      const cred = firebase.auth.EmailAuthProvider.credential(user.email, currentPw);
+      await user.reauthenticateWithCredential(cred);
+      await user.updatePassword(newPw);
+      errSlot.innerHTML = `<div class="login-note">Password updated successfully.</div>`;
+      setTimeout(closeModal, 1500);
+    } catch(err){
+      errSlot.innerHTML = `<div class="login-error">${esc(err.code==="auth/wrong-password"||err.code==="auth/invalid-credential" ? "Current password is incorrect." : err.message)}</div>`;
+    }
+  });
+}
+
+
+function exportFilingsCSV(){
+  const scoped = visibleFilings();
+  const rows = [["Client","Filing Type","Due Date","Assigned To","Status","Fee","Payment Status"]];
+  scoped.forEach(f=>{
+    rows.push([clientName(f.clientId), f.type, f.dueDate, empName(f.employeeId), f.status, f.fee||0, f.paymentStatus||"Pending"]);
+  });
+  const csvContent = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "filings_export_" + today.toISOString().slice(0,10) + ".csv";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+
 function openAddClientModal(){
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" id="overlay"><div class="modal-box">
@@ -585,24 +651,42 @@ function openAddClientModal(){
       <div class="modal-body">
         <div class="field"><label>Client name</label><input id="f-name" placeholder="e.g. Ramesh Gupta" /></div>
         <div class="field"><label>Company name (optional)</label><input id="f-company" placeholder="e.g. Sunrise Traders Pvt Ltd" /></div>
-        <div class="field"><label>PAN</label><input id="f-pan" placeholder="ABCDE1234F" /></div>
-        <div class="field"><label>GSTIN (optional)</label><input id="f-gstin" placeholder="07ABCDE1234F1Z5" /></div>
+        <div class="field"><label>Other companies (optional, comma-separated)</label><input id="f-other-companies" placeholder="e.g. ABC Exports, XYZ Foods" /></div>
+        <div class="field"><label>Phone number (optional)</label><input id="f-phone" placeholder="e.g. 9876543210" /></div>
+        <div class="field"><label>PAN</label><input id="f-pan" placeholder="ABCDE1234F" /><div id="pan-error" class="field-error"></div></div>
+        <div class="field"><label>GSTIN (optional)</label><input id="f-gstin" placeholder="07ABCDE1234F1Z5" /><div id="gstin-error" class="field-error"></div></div>
         <div class="field"><label>Entity type</label><select id="f-type">${clientTypes.map(t=>`<option value="${t}">${t}</option>`).join("")}</select></div>
+        <div class="field"><label>Notes (optional)</label><textarea id="f-notes" rows="3" placeholder="e.g. Prefers WhatsApp reminders, pays late" style="width:100%;border:1px solid var(--input-border);border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
         <button class="btn-primary" id="save-client" style="width:100%;justify-content:center;margin-top:8px">Save client</button>
       </div>
     </div></div>`;
   document.getElementById("close-modal").addEventListener("click", closeModal);
   document.getElementById("overlay").addEventListener("click", (e)=>{ if(e.target.id==="overlay") closeModal(); });
-  document.getElementById("f-pan").addEventListener("input", e=>e.target.value=e.target.value.toUpperCase());
-  document.getElementById("f-gstin").addEventListener("input", e=>e.target.value=e.target.value.toUpperCase());
+  document.getElementById("f-pan").addEventListener("input", e=>{ e.target.value=e.target.value.toUpperCase(); document.getElementById("pan-error").textContent=""; });
+  document.getElementById("f-gstin").addEventListener("input", e=>{ e.target.value=e.target.value.toUpperCase(); document.getElementById("gstin-error").textContent=""; });
   document.getElementById("save-client").addEventListener("click", async ()=>{
     const name = document.getElementById("f-name").value.trim();
     const companyName = document.getElementById("f-company").value.trim();
+    const otherCompaniesRaw = document.getElementById("f-other-companies").value.trim();
+    const otherCompanies = otherCompaniesRaw ? otherCompaniesRaw.split(",").map(s=>s.trim()).filter(Boolean) : [];
+    const phone = document.getElementById("f-phone").value.trim();
     const pan = document.getElementById("f-pan").value.trim();
     const gstin = document.getElementById("f-gstin").value.trim();
     const type = document.getElementById("f-type").value;
-    if(!name || !pan) return;
-    await db.collection("clients").add({ name, companyName: companyName||"", pan, gstin: gstin||"-", type, status:"Active" });
+    const notes = document.getElementById("f-notes").value.trim();
+    if(!name){ return; }
+    if(!pan || !isValidPAN(pan)){
+      document.getElementById("pan-error").textContent = "Enter a valid 10-character PAN (e.g. ABCDE1234F)";
+      return;
+    }
+    if(gstin && !isValidGSTIN(gstin)){
+      document.getElementById("gstin-error").textContent = "Enter a valid 15-character GSTIN, or leave blank";
+      return;
+    }
+    await db.collection("clients").add({
+      name, companyName: companyName||"", otherCompanies, phone: phone||"",
+      pan, gstin: gstin||"-", type, status:"Active", notes: notes||""
+    });
     await refreshClients();
     closeModal(); renderMain();
   });
