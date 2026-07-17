@@ -421,7 +421,7 @@ function dashboardHTML(){
 
 function clientsHTML(){
   const scoped = visibleClients();
-  const filtered = scoped.filter(c => c.name.toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.pan||"").toLowerCase().includes(state.clientSearch.toLowerCase()));
+  const filtered = scoped.filter(c => c.name.toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.pan||"").toLowerCase().includes(state.clientSearch.toLowerCase()) || (c.companyName||"").toLowerCase().includes(state.clientSearch.toLowerCase()));
   return `
     <div class="row-between">
       <div><h1 class="page-title serif">Clients</h1><p class="page-sub" style="margin-bottom:0">${scoped.length} client${scoped.length!==1?'s':''}${isEmployee()?" assigned to you":" on record"}</p></div>
@@ -429,14 +429,14 @@ function clientsHTML(){
     </div>
     <div class="search-wrap"><span class="search-icon">🔍</span><input id="client-search" placeholder="Search by name or PAN..." value="${esc(state.clientSearch)}" /></div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>PAN</th><th>Type</th><th>Status</th><th>Open filings</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Company</th><th>PAN</th><th>Type</th><th>Status</th><th>Open filings</th><th></th></tr></thead>
       <tbody>
         ${filtered.length ? filtered.map(c=>{ const openCount = visibleFilings().filter(f=>f.clientId===c.id && f.status!=="Filed").length; return `
           <tr class="clickable" data-client="${c.id}">
-            <td class="cell-strong">${esc(c.name)}</td><td class="cell-muted">${esc(c.pan||"-")}</td>
+            <td class="cell-strong">${esc(c.name)}</td><td class="cell-muted">${esc(c.companyName||"-")}</td><td class="cell-muted">${esc(c.pan||"-")}</td>
             <td class="cell-muted">${esc(c.type||"-")}</td><td><span class="pill pill-green">${esc(c.status||"Active")}</span></td>
             <td class="cell-muted">${openCount}</td><td class="chevron">›</td>
-          </tr>`; }).join("") : `<tr><td colspan="6" class="empty-note">No clients found.</td></tr>`}
+          </tr>`; }).join("") : `<tr><td colspan="7" class="empty-note">No clients found.</td></tr>`}
       </tbody>
     </table></div>
   `;
@@ -449,7 +449,7 @@ function clientDetailHTML(){
   return `
     <button class="link-back" id="btn-back-clients">← Back to clients</button>
     <h1 class="page-title serif">${esc(c.name)}</h1>
-    <p class="page-sub">${esc(c.type||"-")} · PAN ${esc(c.pan||"-")} · GSTIN ${esc(c.gstin||"-")}</p>
+    <p class="page-sub">${c.companyName?esc(c.companyName)+" · ":""}${esc(c.type||"-")} · PAN ${esc(c.pan||"-")} · GSTIN ${esc(c.gstin||"-")}</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Filing type</th><th>Due date</th><th>Assigned to</th><th>Status</th><th>Fee</th><th>Payment</th></tr></thead>
       <tbody>
@@ -583,7 +583,8 @@ function openAddClientModal(){
     <div class="modal-overlay" id="overlay"><div class="modal-box">
       <div class="modal-head"><h3 class="serif">Add client</h3><button class="modal-close" id="close-modal">✕</button></div>
       <div class="modal-body">
-        <div class="field"><label>Client name</label><input id="f-name" placeholder="e.g. Sunrise Traders" /></div>
+        <div class="field"><label>Client name</label><input id="f-name" placeholder="e.g. Ramesh Gupta" /></div>
+        <div class="field"><label>Company name (optional)</label><input id="f-company" placeholder="e.g. Sunrise Traders Pvt Ltd" /></div>
         <div class="field"><label>PAN</label><input id="f-pan" placeholder="ABCDE1234F" /></div>
         <div class="field"><label>GSTIN (optional)</label><input id="f-gstin" placeholder="07ABCDE1234F1Z5" /></div>
         <div class="field"><label>Entity type</label><select id="f-type">${clientTypes.map(t=>`<option value="${t}">${t}</option>`).join("")}</select></div>
@@ -596,11 +597,12 @@ function openAddClientModal(){
   document.getElementById("f-gstin").addEventListener("input", e=>e.target.value=e.target.value.toUpperCase());
   document.getElementById("save-client").addEventListener("click", async ()=>{
     const name = document.getElementById("f-name").value.trim();
+    const companyName = document.getElementById("f-company").value.trim();
     const pan = document.getElementById("f-pan").value.trim();
     const gstin = document.getElementById("f-gstin").value.trim();
     const type = document.getElementById("f-type").value;
     if(!name || !pan) return;
-    await db.collection("clients").add({ name, pan, gstin: gstin||"-", type, status:"Active" });
+    await db.collection("clients").add({ name, companyName: companyName||"", pan, gstin: gstin||"-", type, status:"Active" });
     await refreshClients();
     closeModal(); renderMain();
   });
