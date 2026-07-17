@@ -206,6 +206,25 @@ function empName(id){ const e = employees.find(x=>x.id===id); return e ? e.name 
 function clientName(id){ const c = clients.find(x=>x.id===id); return c ? c.name : "Unknown"; }
 function daysUntil(dateStr){ const t = new Date(dateStr); const now = new Date(); now.setHours(0,0,0,0); return Math.round((t-now)/(1000*60*60*24)); }
 function addOneMonth(dateStr){ const t = new Date(dateStr); t.setMonth(t.getMonth()+1); return t.toISOString().slice(0,10); }
+function addMonths(dateStr, months){ const t = new Date(dateStr); t.setMonth(t.getMonth()+months); return t.toISOString().slice(0,10); }
+function intervalMonthsForType(type){
+  if(type.indexOf("GST Return") === 0) return 1;
+  if(type.indexOf("TDS Return") === 0) return 3;
+  if(type === "Income Tax Return") return 12;
+  if(type === "ROC Annual Filing") return 12;
+  return 1;
+}
+function defaultFirstDueDate(type){
+  const months = intervalMonthsForType(type);
+  const daysAhead = months===1 ? 10 : months===3 ? 20 : 30;
+  const t = new Date(today); t.setDate(t.getDate()+daysAhead);
+  return t.toISOString().slice(0,10);
+}
+function otherGSTType(type){
+  if(type === "GST Return (GSTR-1)") return "GST Return (GSTR-3B)";
+  if(type === "GST Return (GSTR-3B)") return "GST Return (GSTR-1)";
+  return null;
+}
 function urgency(f){
   if(f.status==="Filed") return {label:"Filed", cls:"u-green"};
   const diff = daysUntil(f.dueDate);
@@ -222,8 +241,8 @@ function isValidGSTIN(gstin){ return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{
 function visibleFilings(){ return isEmployee() ? filings.filter(f=>f.employeeId===currentUser.uid) : filings; }
 function visibleClients(){
   if(isEmployee()){
-    const myIds = new Set(filings.filter(f=>f.employeeId===currentUser.uid).map(f=>f.clientId));
-    return clients.filter(c=>myIds.has(c.id));
+    const myFilingIds = new Set(filings.filter(f=>f.employeeId===currentUser.uid).map(f=>f.clientId));
+    return clients.filter(c => c.assignedEmployeeId===currentUser.uid || myFilingIds.has(c.id));
   }
   return clients;
 }
@@ -436,12 +455,12 @@ function clientsHTML(){
     </div>
     <div class="search-wrap"><span class="search-icon">🔍</span><input id="client-search" placeholder="Search by name or PAN..." value="${esc(state.clientSearch)}" /></div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Company</th><th>Phone</th><th>PAN</th><th>Type</th><th>Status</th><th>Open filings</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Company</th><th>Phone</th><th>PAN</th><th>Type</th>${isAdmin()?"<th>Assigned To</th>":""}<th>Status</th><th>Open filings</th><th></th></tr></thead>
       <tbody>
         ${filtered.length ? filtered.map(c=>{ const openCount = visibleFilings().filter(f=>f.clientId===c.id && f.status!=="Filed").length; return `
           <tr class="clickable" data-client="${c.id}">
             <td class="cell-strong">${esc(c.name)}</td><td class="cell-muted">${esc(c.companyName||"-")}</td><td class="cell-muted">${esc(c.phone||"-")}</td><td class="cell-muted">${esc(c.pan||"-")}</td>
-            <td class="cell-muted">${esc(c.type||"-")}</td><td><span class="pill pill-green">${esc(c.status||"Active")}</span></td>
+            <td class="cell-muted">${esc(c.type||"-")}</td>${isAdmin()?`<td class="cell-muted">${c.assignedEmployeeId?esc(empName(c.assignedEmployeeId)):"Unassigned"}</td>`:""}<td><span class="pill pill-green">${esc(c.status||"Active")}</span></td>
             <td class="cell-muted">${openCount}</td><td class="chevron">›</td>
           </tr>`; }).join("") : `<tr><td colspan="8" class="empty-note">No clients found.</td></tr>`}
       </tbody>
@@ -453,10 +472,18 @@ function clientDetailHTML(){
   const c = visibleClients().find(x=>x.id===state.selectedClient);
   if(!c) return `<div class="empty-note">Client not found or not assigned to you.</div>`;
   const cFilings = visibleFilings().filter(f=>f.clientId===c.id);
+  const canLogPayment = isAdmin() || (isEmployee() && c.assignedEmployeeId===currentUser.uid);
+  const clientPayments = payments.filter(p=>p.clientId===c.id).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const totalCollectedForClient = clientPayments.reduce((s,p)=>s+(p.amount||0),0);
   return `
     <button class="link-back" id="btn-back-clients">← Back to clients</button>
-    <h1 class="page-title serif">${esc(c.name)}</h1>
+    <div class="row-between" style="margin-bottom:8px">
+      <h1 class="page-title serif" style="margin-bottom:0">${esc(c.name)}</h1>
+      ${isAdmin() ? `<button class="btn-primary" id="btn-delete-client" style="background:var(--red-text)">🗑 Delete client</button>` : ""}
+    </div>
     <p class="page-sub">${c.companyName?esc(c.companyName)+" · ":""}${esc(c.type||"-")} · PAN ${esc(c.pan||"-")} · GSTIN ${esc(c.gstin||"-")}${c.phone?" · 📞 "+esc(c.phone):""}</p>
+    <p class="page-sub" style="margin-top:-16px">Assigned to: <strong>${c.assignedEmployeeId?esc(empName(c.assignedEmployeeId)):"Unassigned"}</strong></p>
+    ${(c.filingSubscriptions && c.filingSubscriptions.length) ? `<p class="page-sub" style="margin-top:-16px">Subscribed filings: ${c.filingSubscriptions.map(t=>esc(t)).join(", ")}</p>` : ""}
     ${(c.otherCompanies && c.otherCompanies.length) ? `<div style="margin-bottom:12px">${c.otherCompanies.map(o=>`<span class="pill pill-green" style="margin-right:6px">${esc(o)}</span>`).join("")}</div>` : ""}
     ${c.notes ? `<div class="card" style="margin-bottom:20px"><h2 class="serif" style="font-size:14px">Notes</h2><p class="cell-muted" style="font-size:13px;margin:0">${esc(c.notes)}</p></div>` : ""}
     <div class="table-wrap"><table>
@@ -470,6 +497,20 @@ function clientDetailHTML(){
         `).join("") : `<tr><td colspan="6" class="empty-note">No filings recorded for this client yet.</td></tr>`}
       </tbody>
     </table></div>
+    ${canLogPayment ? `
+    <div class="card" style="margin-top:20px">
+      <div class="row-between" style="margin-bottom:8px">
+        <h2 class="serif" style="margin:0">Payments collected from this client</h2>
+        <button class="btn-primary" id="btn-log-payment-client" style="background:#2F6B45">+ Log payment</button>
+      </div>
+      <p class="cell-muted" style="font-size:13px;margin:0 0 10px 0">Total collected: <strong style="color:var(--green-text)">₹${totalCollectedForClient.toLocaleString('en-IN')}</strong></p>
+      ${clientPayments.length ? clientPayments.map(p=>`
+        <div class="upcoming-row">
+          <div><div class="upcoming-name">${esc(p.note||"Payment")}</div><div class="upcoming-meta">${isAdmin()?`collected by ${esc(empName(p.employeeId))} · `:""}${p.date}</div></div>
+          <div class="urgency u-green">₹${(p.amount||0).toLocaleString('en-IN')}</div>
+        </div>
+      `).join("") : `<div class="empty-note" style="padding:8px 0">No payments logged yet for this client.</div>`}
+    </div>` : ""}
   `;
 }
 
@@ -481,7 +522,6 @@ function filingsHTML(){
       <div><h1 class="page-title serif">Filings</h1><p class="page-sub" style="margin-bottom:0">${scoped.length} filing${scoped.length!==1?'s':''}${isEmployee()?" assigned to you":" tracked across all clients"}</p></div>
       <div style="display:flex;gap:8px">
         <button class="btn-primary" id="btn-export-csv" style="background:#6B655A">⬇ Export CSV</button>
-        <button class="btn-primary" id="btn-log-payment" style="background:#2F6B45">+ Log payment</button>
         ${isAdmin()?`<button class="btn-primary" id="btn-add-filing">+ Add filing</button>`:""}
       </div>
     </div>
@@ -550,11 +590,27 @@ function bindMainEvents(){
   }
   if(state.tab==="clients" && state.selectedClient){
     document.getElementById("btn-back-clients").addEventListener("click", ()=>{ state.selectedClient=null; renderMain(); });
+    const delBtn = document.getElementById("btn-delete-client");
+    if(delBtn) delBtn.addEventListener("click", async ()=>{
+      const c = clients.find(x=>x.id===state.selectedClient);
+      if(!c) return;
+      const confirmed = confirm(`Delete "${c.name}"? This will also delete all their filings and payment records. This cannot be undone.`);
+      if(!confirmed) return;
+      const clientFilings = filings.filter(f=>f.clientId===c.id);
+      const clientPaymentsToDelete = payments.filter(p=>p.clientId===c.id);
+      for(const f of clientFilings) await db.collection("filings").doc(f.id).delete();
+      for(const p of clientPaymentsToDelete) await db.collection("payments").doc(p.id).delete();
+      await db.collection("clients").doc(c.id).delete();
+      await refreshClients(); await refreshFilings(); await refreshPayments();
+      state.selectedClient = null;
+      renderMain();
+    });
+    const logPayBtn = document.getElementById("btn-log-payment-client");
+    if(logPayBtn) logPayBtn.addEventListener("click", ()=>openLogPaymentModal(state.selectedClient));
   }
   if(state.tab==="filings"){
     const addBtn = document.getElementById("btn-add-filing");
     if(addBtn) addBtn.addEventListener("click", openAddFilingModal);
-    document.getElementById("btn-log-payment").addEventListener("click", openLogPaymentModal);
     document.getElementById("btn-export-csv").addEventListener("click", exportFilingsCSV);
     const filterEmp = document.getElementById("filter-emp");
     if(filterEmp) filterEmp.addEventListener("change", (e)=>{ state.filingFilterEmp = e.target.value; renderMain(); });
@@ -569,12 +625,27 @@ function bindMainEvents(){
       const wasNotFiled = f.status !== "Filed";
       await db.collection("filings").doc(f.id).update({ status: newStatus });
       if(wasNotFiled && newStatus === "Filed" && f.recurring){
-        const nextDue = addOneMonth(f.dueDate);
+        const nextDue = addMonths(f.dueDate, intervalMonthsForType(f.type));
         await db.collection("filings").add({
           clientId: f.clientId, type: f.type, dueDate: nextDue,
           status: daysUntil(nextDue) < 0 ? "Overdue" : "Pending",
           employeeId: f.employeeId, recurring: true, fee: f.fee||0, paymentStatus: "Pending",
         });
+        // GST cross-link: if this client subscribes to the paired GST return type,
+        // and it doesn't currently have a pending/in-progress entry, create one.
+        const pairType = otherGSTType(f.type);
+        if(pairType){
+          const client = clients.find(c=>c.id===f.clientId);
+          const subscribed = client && client.filingSubscriptions && client.filingSubscriptions.includes(pairType);
+          const alreadyOpen = filings.some(x=>x.clientId===f.clientId && x.type===pairType && x.status!=="Filed");
+          if(subscribed && !alreadyOpen){
+            await db.collection("filings").add({
+              clientId: f.clientId, type: pairType, dueDate: f.dueDate,
+              status: daysUntil(f.dueDate) < 0 ? "Overdue" : "Pending",
+              employeeId: f.employeeId, recurring: true, fee: 0, paymentStatus: "Pending",
+            });
+          }
+        }
       }
       await refreshFilings(); renderMain();
     }));
@@ -656,6 +727,18 @@ function openAddClientModal(){
         <div class="field"><label>PAN</label><input id="f-pan" placeholder="ABCDE1234F" /><div id="pan-error" class="field-error"></div></div>
         <div class="field"><label>GSTIN (optional)</label><input id="f-gstin" placeholder="07ABCDE1234F1Z5" /><div id="gstin-error" class="field-error"></div></div>
         <div class="field"><label>Entity type</label><select id="f-type">${clientTypes.map(t=>`<option value="${t}">${t}</option>`).join("")}</select></div>
+        <div class="field"><label>Assign to employee</label><select id="f-assigned-emp"><option value="">-- Unassigned --</option>${employees.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join("")}</select></div>
+        <div class="field">
+          <label>Filings applicable to this client</label>
+          <div style="display:flex;flex-direction:column;gap:6px;border:1px solid var(--input-border);border-radius:6px;padding:10px">
+            ${filingTypes.map(t=>`
+              <label style="display:flex;align-items:center;gap:8px;font-weight:400;font-size:13px;margin:0">
+                <input type="checkbox" class="f-subscription" value="${t}" style="width:auto" /> ${t} <span class="cell-muted" style="font-size:11px">(${intervalMonthsForType(t)===1?'monthly':intervalMonthsForType(t)===3?'quarterly':'yearly'})</span>
+              </label>
+            `).join("")}
+          </div>
+          <p class="cell-muted" style="font-size:11px;margin-top:6px">First pending filing for each selected type will be created automatically, on the right schedule.</p>
+        </div>
         <div class="field"><label>Notes (optional)</label><textarea id="f-notes" rows="3" placeholder="e.g. Prefers WhatsApp reminders, pays late" style="width:100%;border:1px solid var(--input-border);border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
         <button class="btn-primary" id="save-client" style="width:100%;justify-content:center;margin-top:8px">Save client</button>
       </div>
@@ -674,6 +757,8 @@ function openAddClientModal(){
     const gstin = document.getElementById("f-gstin").value.trim();
     const type = document.getElementById("f-type").value;
     const notes = document.getElementById("f-notes").value.trim();
+    const assignedEmployeeId = document.getElementById("f-assigned-emp").value;
+    const filingSubscriptions = Array.from(document.querySelectorAll(".f-subscription:checked")).map(el=>el.value);
     if(!name){ return; }
     if(!pan || !isValidPAN(pan)){
       document.getElementById("pan-error").textContent = "Enter a valid 10-character PAN (e.g. ABCDE1234F)";
@@ -683,11 +768,21 @@ function openAddClientModal(){
       document.getElementById("gstin-error").textContent = "Enter a valid 15-character GSTIN, or leave blank";
       return;
     }
-    await db.collection("clients").add({
+    const clientRef = await db.collection("clients").add({
       name, companyName: companyName||"", otherCompanies, phone: phone||"",
-      pan, gstin: gstin||"-", type, status:"Active", notes: notes||""
+      pan, gstin: gstin||"-", type, status:"Active", notes: notes||"", assignedEmployeeId: assignedEmployeeId||"",
+      filingSubscriptions
     });
+    for(const ftype of filingSubscriptions){
+      const dueDate = defaultFirstDueDate(ftype);
+      await db.collection("filings").add({
+        clientId: clientRef.id, type: ftype, dueDate,
+        status: daysUntil(dueDate) < 0 ? "Overdue" : "Pending",
+        employeeId: assignedEmployeeId||"", recurring: true, fee: 0, paymentStatus: "Pending"
+      });
+    }
     await refreshClients();
+    await refreshFilings();
     closeModal(); renderMain();
   });
 }
@@ -703,7 +798,7 @@ function openAddFilingModal(){
         <div class="field"><label>Fee amount (₹)</label><input type="number" id="f-fee" placeholder="e.g. 1500" /></div>
         <div class="field"><label>Payment status</label><select id="f-payment"><option value="Pending">Pending</option><option value="Paid">Paid</option></select></div>
         <div class="field"><label>Assign to</label><select id="f-emp">${employees.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join("")}</select></div>
-        <div class="field" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="f-recurring" style="width:auto" /><label style="margin:0" for="f-recurring">Repeat every month</label></div>
+        <div class="field" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="f-recurring" style="width:auto" /><label style="margin:0" for="f-recurring">Repeat automatically (based on filing type's schedule)</label></div>
         <button class="btn-primary" id="save-filing" style="width:100%;justify-content:center;margin-top:8px">Save filing</button>
       </div>
     </div></div>`;
@@ -724,16 +819,19 @@ function openAddFilingModal(){
   });
 }
 
-function openLogPaymentModal(){
-  const scopedClients = visibleClients();
+function openLogPaymentModal(fixedClientId){
+  const client = clients.find(c=>c.id===fixedClientId);
+  const clientFieldHTML = client
+    ? `<div class="field"><label>Client</label><input value="${esc(client.name)}" disabled /></div>`
+    : `<div class="field"><label>Client</label><select id="p-client">${visibleClients().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>`;
   const employeeFieldHTML = isEmployee()
     ? `<div class="field"><label>Collected by</label><input value="${esc(currentUser.name)}" disabled /></div>`
-    : `<div class="field"><label>Collected by</label><select id="p-emp">${employees.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join("")}</select></div>`;
+    : `<div class="field"><label>Collected by</label><select id="p-emp">${employees.map(e=>`<option value="${e.id}" ${client && client.assignedEmployeeId===e.id?'selected':''}>${esc(e.name)}</option>`).join("")}</select></div>`;
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" id="overlay"><div class="modal-box">
       <div class="modal-head"><h3 class="serif">Log payment</h3><button class="modal-close" id="close-modal">✕</button></div>
       <div class="modal-body">
-        <div class="field"><label>Client</label><select id="p-client">${scopedClients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>
+        ${clientFieldHTML}
         <div class="field"><label>Amount (₹)</label><input type="number" id="p-amount" placeholder="e.g. 1500" /></div>
         <div class="field"><label>Date</label><input type="date" id="p-date" value="${today.toISOString().slice(0,10)}" /></div>
         ${employeeFieldHTML}
@@ -744,7 +842,7 @@ function openLogPaymentModal(){
   document.getElementById("close-modal").addEventListener("click", closeModal);
   document.getElementById("overlay").addEventListener("click", (e)=>{ if(e.target.id==="overlay") closeModal(); });
   document.getElementById("save-payment").addEventListener("click", async ()=>{
-    const clientId = document.getElementById("p-client").value;
+    const clientId = fixedClientId || document.getElementById("p-client").value;
     const amount = parseFloat(document.getElementById("p-amount").value) || 0;
     const date = document.getElementById("p-date").value;
     const note = document.getElementById("p-note").value.trim();
